@@ -1549,8 +1549,23 @@ e_inval:
 	return -EINVAL;
 }
 
+static __printf(3, 4)
+void print_osd_info(struct ceph_fsid *fsid, u64 gid, const char *fmt, ...)
+{
+	struct va_format vaf;
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.fmt = fmt;
+	vaf.va = &args;
+
+	printk(KERN_INFO "%s (%pU %lld): %pV", KBUILD_MODNAME, fsid, gid, &vaf);
+
+	va_end(args);
+}
+
 static int decode_new_primary_affinity(void **p, void *end,
-				       struct ceph_osdmap *map)
+				       struct ceph_osdmap *map, u64 gid)
 {
 	u32 n;
 
@@ -1566,7 +1581,8 @@ static int decode_new_primary_affinity(void **p, void *end,
 		if (ret)
 			return ret;
 
-		pr_info("osd%d primary-affinity 0x%x\n", osd, aff);
+		print_osd_info(&map->fsid, gid, "osd%d primary-affinity 0x%x\n",
+			       osd, aff);
 	}
 
 	return 0;
@@ -1825,7 +1841,8 @@ struct ceph_osdmap *ceph_osdmap_decode(void **p, void *end, bool msgr2)
  *     new_state: { osd=6, xorstate=EXISTS } # clear osd_state
  */
 static int decode_new_up_state_weight(void **p, void *end, u8 struct_v,
-				      bool msgr2, struct ceph_osdmap *map)
+				      bool msgr2, struct ceph_osdmap *map,
+				      u64 gid)
 {
 	void *new_up_client;
 	void *new_state;
@@ -1864,9 +1881,10 @@ static int decode_new_up_state_weight(void **p, void *end, u8 struct_v,
 		osd = ceph_decode_32(p);
 		w = ceph_decode_32(p);
 		BUG_ON(osd >= map->max_osd);
-		pr_info("osd%d weight 0x%x %s\n", osd, w,
-		     w == CEPH_OSD_IN ? "(in)" :
-		     (w == CEPH_OSD_OUT ? "(out)" : ""));
+		print_osd_info(&map->fsid, gid, "osd%d weight 0x%x %s\n",
+			       osd, w,
+			       w == CEPH_OSD_IN ? "(in)" :
+			       (w == CEPH_OSD_OUT ? "(out)" : ""));
 		map->osd_weight[osd] = w;
 
 		/*
@@ -1898,10 +1916,11 @@ static int decode_new_up_state_weight(void **p, void *end, u8 struct_v,
 		BUG_ON(osd >= map->max_osd);
 		if ((map->osd_state[osd] & CEPH_OSD_UP) &&
 		    (xorstate & CEPH_OSD_UP))
-			pr_info("osd%d down\n", osd);
+			print_osd_info(&map->fsid, gid, "osd%d down\n", osd);
 		if ((map->osd_state[osd] & CEPH_OSD_EXISTS) &&
 		    (xorstate & CEPH_OSD_EXISTS)) {
-			pr_info("osd%d does not exist\n", osd);
+			print_osd_info(&map->fsid, gid, "osd%d does not exist\n",
+				       osd);
 			ret = set_primary_affinity(map, osd,
 						   CEPH_OSD_DEFAULT_PRIMARY_AFFINITY);
 			if (ret)
@@ -1931,7 +1950,7 @@ static int decode_new_up_state_weight(void **p, void *end, u8 struct_v,
 
 		dout("%s osd%d addr %s\n", __func__, osd, ceph_pr_addr(&addr));
 
-		pr_info("osd%d up\n", osd);
+		print_osd_info(&map->fsid, gid, "osd%d up\n", osd);
 		map->osd_state[osd] |= CEPH_OSD_EXISTS | CEPH_OSD_UP;
 		map->osd_addr[osd] = addr;
 	}
@@ -1947,7 +1966,7 @@ e_inval:
  * decode and apply an incremental map update.
  */
 struct ceph_osdmap *osdmap_apply_incremental(void **p, void *end, bool msgr2,
-					     struct ceph_osdmap *map)
+					     struct ceph_osdmap *map, u64 gid)
 {
 	struct ceph_fsid fsid;
 	u32 epoch = 0;
@@ -2033,7 +2052,7 @@ struct ceph_osdmap *osdmap_apply_incremental(void **p, void *end, bool msgr2,
 	}
 
 	/* new_up_client, new_state, new_weight */
-	err = decode_new_up_state_weight(p, end, struct_v, msgr2, map);
+	err = decode_new_up_state_weight(p, end, struct_v, msgr2, map, gid);
 	if (err)
 		goto bad;
 
@@ -2051,7 +2070,7 @@ struct ceph_osdmap *osdmap_apply_incremental(void **p, void *end, bool msgr2,
 
 	/* new_primary_affinity */
 	if (struct_v >= 2) {
-		err = decode_new_primary_affinity(p, end, map);
+		err = decode_new_primary_affinity(p, end, map, gid);
 		if (err)
 			goto bad;
 	}
